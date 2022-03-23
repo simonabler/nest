@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { EMPTY } from 'rxjs';
 import * as sinon from 'sinon';
 import { ClientRMQ } from '../../client/client-rmq';
-import { ReadPacket } from '../../interfaces';
+import { ReadPacket, RmqExchangeOptions } from '../../interfaces';
 import { RmqRecord } from '../../record-builders';
 
 describe('ClientRMQ', function () {
@@ -118,18 +118,26 @@ describe('ClientRMQ', function () {
     const queueOptions = {};
     const isGlobalPrefetchCount = true;
     const prefetchCount = 10;
-
+    const exchange: RmqExchangeOptions = {
+      name: 'string',
+      routingKey: 'string',
+      type: 'fanout',
+      echangeOpts: {},
+    };
     let consumeStub: sinon.SinonStub;
     let channel: any = {};
 
     beforeEach(() => {
       client['queue'] = queue;
       client['queueOptions'] = queueOptions;
+      client['exchange'] = null;
       (client as any)['options'] = { isGlobalPrefetchCount, prefetchCount };
 
       channel = {
         assertQueue: sinon.spy(() => ({})),
         prefetch: sinon.spy(),
+        assertExchange: sinon.spy(() => ({})),
+        bindQueue: sinon.spy(() => ({})),
       };
       consumeStub = sinon.stub(client, 'consumeChannel').callsFake(() => null);
     });
@@ -139,6 +147,24 @@ describe('ClientRMQ', function () {
     it('should call "assertQueue" with queue and queue options', async () => {
       await client.setupChannel(channel, () => null);
       expect(channel.assertQueue.calledWith(queue, queueOptions)).to.be.true;
+    });
+    it('should call "assertExchange" if with exchange option is set and with exchange options', async () => {
+      client['exchange'] = exchange;
+      await client.setupChannel(channel, () => null);
+      expect(
+        channel.assertExchange.calledWith(
+          exchange.name,
+          exchange.type,
+          exchange.echangeOpts,
+        ),
+      ).to.be.true;
+    });
+    it('should call "bindQueue" if with exchange and queue option is set and with exchange options', async () => {
+      client['exchange'] = exchange;
+      await client.setupChannel(channel, () => null);
+      expect(
+        channel.bindQueue.calledWith(queue, exchange.name, exchange.routingKey),
+      ).to.be.true;
     });
     it('should call "prefetch" with prefetchCount and "isGlobalPrefetchCount"', async () => {
       await client.setupChannel(channel, () => null);
@@ -367,22 +393,42 @@ describe('ClientRMQ', function () {
   describe('dispatchEvent', () => {
     let msg: ReadPacket;
     let sendToQueueStub: sinon.SinonStub, channel;
+    let publishStub: sinon.SinonStub;
+    const exchange: RmqExchangeOptions = {
+      name: 'string',
+      routingKey: 'string',
+      type: 'fanout',
+      echangeOpts: {},
+    };
 
     beforeEach(() => {
       client = new ClientRMQ({});
       msg = { pattern: 'pattern', data: 'data' };
       sendToQueueStub = sinon.stub();
+      publishStub = sinon.stub();
       channel = {
         sendToQueue: sendToQueueStub,
+        publish: publishStub,
       };
       (client as any).channel = channel;
+
+      sendToQueueStub.callsFake((a, b, c, d) => d());
+      publishStub.callsFake((a, b, c, d, e) => e());
     });
 
-    it('should publish packet', async () => {
-      sendToQueueStub.callsFake((a, b, c, d) => d());
+    it('should publish packet with sendToQueue without exchange setting', async () => {
       await client['dispatchEvent'](msg);
-
       expect(sendToQueueStub.called).to.be.true;
+    });
+    it('should not publish packet with sendToQueue with exchange setting', async () => {
+      client['exchange'] = exchange;
+      await client['dispatchEvent'](msg);
+      expect(sendToQueueStub.called).to.be.false;
+    });
+    it('should publish packet with publish with exchange setting', async () => {
+      client['exchange'] = exchange;
+      await client['dispatchEvent'](msg);
+      expect(publishStub.called).to.be.true;
     });
     it('should throw error', async () => {
       sendToQueueStub.callsFake((a, b, c, d) => d(new Error()));
