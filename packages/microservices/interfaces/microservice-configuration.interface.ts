@@ -1,5 +1,6 @@
 import { Type } from '@nestjs/common';
 import { TcpSocket } from '../helpers';
+import { IdentityDeserializer } from '../deserializers/identity.deserializer';
 import { Transport } from '../enums/transport.enum';
 import { ChannelOptions } from '../external/grpc-options.interface';
 import {
@@ -13,6 +14,7 @@ import {
 import { MqttClientOptions, QoS } from '../external/mqtt-options.interface';
 import { ClientOpts } from '../external/redis.interface';
 import { RmqUrl } from '../external/rmq-url.interface';
+import { IdentitySerializer } from '../serializers/identity.serializer';
 import { CustomTransportStrategy } from './custom-transport-strategy.interface';
 import { Deserializer } from './deserializer.interface';
 import { Serializer } from './serializer.interface';
@@ -171,20 +173,35 @@ export interface NatsOptions {
 
 export interface RmqOptions {
   transport?: Transport.RMQ;
-  options?: {
-    urls?: string[] | RmqUrl[];
-    queue?: string;
-    prefetchCount?: number;
-    isGlobalPrefetchCount?: boolean;
-    queueOptions?: any; // AmqplibQueueOptions;
-    socketOptions?: any; // AmqpConnectionManagerSocketOptions;
-    noAck?: boolean;
-    serializer?: Serializer;
-    deserializer?: Deserializer;
-    replyQueue?: string;
-    persistent?: boolean;
-    headers?: Record<string, string>;
-  };
+  options?: RmqOptionsDetail | RmqOptionsDetailExchange;
+}
+
+export interface RmqOptionsDetail {
+  urls?: string[] | RmqUrl[];
+  queue?: string;
+  prefetchCount?: number;
+  isGlobalPrefetchCount?: boolean;
+  queueOptions?: any; // AmqplibQueueOptions;
+  socketOptions?: any; // AmqpConnectionManagerSocketOptions;
+  noAck?: boolean;
+  serializer?: Serializer;
+  deserializer?: Deserializer;
+  replyQueue?: string;
+  persistent?: boolean;
+  headers?: Record<string, string>;
+}
+
+export interface RmqOptionsDetailExchange extends RmqOptionsDetail {
+  serializer?: IdentitySerializer;
+  deserializer?: IdentityDeserializer;
+  exchange?: RmqExchangeOptions;
+}
+
+export interface RmqExchangeOptions {
+  name: string;
+  routingKey: string;
+  type: 'fanout' | 'topic' | 'direct'; // the exchange type
+  echangeOpts: any;
 }
 
 export interface KafkaParserConfig {

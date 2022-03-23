@@ -18,8 +18,14 @@ import {
   RQM_DEFAULT_URL,
 } from '../constants';
 import { RmqUrl } from '../external/rmq-url.interface';
-import { ReadPacket, RmqOptions, WritePacket } from '../interfaces';
-import { RmqRecord } from '../record-builders';
+import {
+  ReadPacket,
+  RmqExchangeOptions,
+  RmqOptions,
+  RmqOptionsDetailExchange,
+  WritePacket,
+} from '../interfaces';
+import { RmqRecord, RmqRecordOptions } from '../record-builders';
 import { RmqRecordSerializer } from '../serializers/rmq-record.serializer';
 import { ClientProxy } from './client-proxy';
 
@@ -38,6 +44,7 @@ export class ClientRMQ extends ClientProxy {
   protected responseEmitter: EventEmitter;
   protected replyQueue: string;
   protected persistent: boolean;
+  protected exchange: RmqExchangeOptions;
 
   constructor(protected readonly options: RmqOptions['options']) {
     super();
@@ -54,6 +61,11 @@ export class ClientRMQ extends ClientProxy {
     loadPackage('amqplib', ClientRMQ.name, () => require('amqplib'));
     rqmPackage = loadPackage('amqp-connection-manager', ClientRMQ.name, () =>
       require('amqp-connection-manager'),
+    );
+
+    this.exchange = this.getOptionsProp(
+      this.options as RmqOptionsDetailExchange,
+      'exchange',
     );
 
     this.initializeSerializer(options);
@@ -130,7 +142,22 @@ export class ClientRMQ extends ClientProxy {
       this.getOptionsProp(this.options, 'isGlobalPrefetchCount') ||
       RQM_DEFAULT_IS_GLOBAL_PREFETCH_COUNT;
 
-    await channel.assertQueue(this.queue, this.queueOptions);
+    if (this.queue) await channel.assertQueue(this.queue, this.queueOptions);
+    if (this.exchange) {
+      await channel.assertExchange(
+        this.exchange.name,
+        this.exchange.type,
+        this.exchange.echangeOpts,
+      );
+      if (this.queue) {
+        await channel.bindQueue(
+          this.queue,
+          this.exchange.name,
+          this.exchange.routingKey,
+        );
+      }
+    }
+
     await channel.prefetch(prefetchCount, isGlobalPrefetchCount);
 
     this.responseEmitter = new EventEmitter();
@@ -218,24 +245,58 @@ export class ClientRMQ extends ClientProxy {
     }
   }
 
-  protected dispatchEvent(packet: ReadPacket): Promise<any> {
+  protected dispatchEvent(
+    packet: RmqOptions['options'] extends RmqOptionsDetailExchange
+      ? ReadPacket<string>
+      : ReadPacket,
+  ): Promise<any> {
     const serializedPacket: ReadPacket & Partial<RmqRecord> =
       this.serializer.serialize(packet);
 
     const options = serializedPacket.options;
     delete serializedPacket.options;
 
-    return new Promise<void>((resolve, reject) =>
-      this.channel.sendToQueue(
-        this.queue,
-        Buffer.from(JSON.stringify(serializedPacket)),
-        {
-          persistent: this.persistent,
-          ...options,
-          headers: this.mergeHeaders(options?.headers),
-        },
-        (err: unknown) => (err ? reject(err) : resolve()),
-      ),
+    return new Promise<void>((resolve, reject) => {
+      if (this.exchange)
+        this.sendToExchange(serializedPacket, options, reject, resolve);
+      else this.sendToQueue(serializedPacket, options, reject, resolve);
+    });
+  }
+
+  private sendToExchange(
+    serializedPacket: ReadPacket<any> & Partial<RmqRecord<any>>,
+    options: RmqRecordOptions,
+    reject: (reason?: any) => void,
+    resolve: (value: void | PromiseLike<void>) => void,
+  ): void {
+    return this.channel.publish(
+      this.exchange.name,
+      serializedPacket.pattern,
+      Buffer.from(JSON.stringify(serializedPacket)),
+      {
+        persistent: this.persistent,
+        ...options,
+        headers: this.mergeHeaders(options?.headers),
+      },
+      (err: unknown) => (err ? reject(err) : resolve()),
+    );
+  }
+
+  private sendToQueue(
+    serializedPacket: ReadPacket<any> & Partial<RmqRecord<any>>,
+    options: RmqRecordOptions,
+    reject: (reason?: any) => void,
+    resolve: (value: void | PromiseLike<void>) => void,
+  ): void {
+    this.channel.sendToQueue(
+      this.queue,
+      Buffer.from(JSON.stringify(serializedPacket)),
+      {
+        persistent: this.persistent,
+        ...options,
+        headers: this.mergeHeaders(options?.headers),
+      },
+      (err: unknown) => (err ? reject(err) : resolve()),
     );
   }
 
